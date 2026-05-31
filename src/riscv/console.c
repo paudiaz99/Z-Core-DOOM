@@ -1,18 +1,10 @@
 /*
  * console.c
  *
- * Copyright (C) 2019-2021 Sylvain Munaut
- * All rights reserved.
+ * UART console for Z-Core
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Original ice40 version by Sylvain Munaut
+ * Adapted for Z-Core AXI-Lite UART
  */
 
 #include <stdint.h>
@@ -21,42 +13,45 @@
 #include "mini-printf.h"
 
 
-struct wb_uart {
-	uint32_t data;
-	uint32_t clkdiv;
-} __attribute__((packed,aligned(4)));
-
-static volatile struct wb_uart * const uart_regs = (void*)(UART_BASE);
-
-
 void
 console_init(void)
 {
-	uart_regs->clkdiv = 23;	/* 1 Mbaud with clk=25MHz */
+	/* 50 MHz / (16 * 115200) ~ 27 */
+	UART_BAUD_DIV = 27;
 }
 
-void
+void __attribute__((noinline))
 console_putchar(char c)
 {
-	uart_regs->data = c;
+	/* Serial terminal expects CR+LF; send CR before every LF. */
+	if (c == '\n') {
+		while (!(UART_STAT & UART_STAT_TX_EMPTY))
+			;
+		UART_TX = '\r';
+		while (!(UART_STAT & UART_STAT_TX_EMPTY))
+			;
+	}
+	while (!(UART_STAT & UART_STAT_TX_EMPTY))
+		;
+	UART_TX = (uint32_t)c;
+	while (!(UART_STAT & UART_STAT_TX_EMPTY))
+		;
 }
 
 char
 console_getchar(void)
 {
-	int32_t c;
-	do {
-		c = uart_regs->data;
-	} while (c & 0x80000000);
-	return c;
+	while (!(UART_STAT & UART_STAT_RX_VALID))
+		;
+	return (char)(UART_RX & 0xFF);
 }
 
 int
 console_getchar_nowait(void)
 {
-	int32_t c;
-	c = uart_regs->data;
-	return c & 0x80000000 ? -1 : (c & 0xff);
+	if (!(UART_STAT & UART_STAT_RX_VALID))
+		return -1;
+	return UART_RX & 0xFF;
 }
 
 void
@@ -64,7 +59,7 @@ console_puts(const char *p)
 {
 	char c;
 	while ((c = *(p++)) != 0x00)
-		uart_regs->data = c;
+		console_putchar(c);
 }
 
 int

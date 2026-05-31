@@ -48,8 +48,9 @@ rcsid[] = "$Id: w_wad.c,v 1.5 1997/02/03 16:47:57 b1 Exp $";
 #endif
 #include "w_wad.h"
 
-
-
+#ifdef ZCORE_DOOM
+#include "riscv/console.h"
+#endif
 
 
 
@@ -66,11 +67,33 @@ void**                  lumpcache;
 
 #define strcmpi strcasecmp
 
+
 char* strupr (char* str)
 {
     char *s = str;
-    while (*s) { *s = toupper(*s); s++; }
+    while (*s) {
+        *s = (char) toupper ((unsigned char) *s);
+        s++;
+    }
     return str;
+}
+
+
+/* Read exactly nbytes into buf (POSIX read may return short counts). */
+static void
+W_ReadFull (int handle, void *buf, int nbytes)
+{
+    unsigned char *p = (unsigned char *) buf;
+    int            got = 0;
+
+    while (got < nbytes)
+    {
+        ssize_t n = read (handle, p + got, (size_t)(nbytes - got));
+        if (n <= 0)
+            I_Error ("W_ReadFull: got %i need %i (last n=%i)",
+                     got, nbytes, (int) n);
+        got += (int) n;
+    }
 }
 
 int filelength (int handle)
@@ -149,6 +172,7 @@ void W_AddFile (char *filename)
     int                 length;
     int                 startlump;
     filelump_t*         fileinfo;
+    filelump_t*         dirbuf = NULL;
     filelump_t          singleinfo;
     int                 storehandle;
 
@@ -176,31 +200,49 @@ void W_AddFile (char *filename)
         // single lump file
         fileinfo = &singleinfo;
         singleinfo.filepos = 0;
-        singleinfo.size = LONG(filelength(handle));
+        singleinfo.size = filelength(handle);  /* rvalue: no byte-swap needed on LE */
         ExtractFileBase (filename, singleinfo.name);
         numlumps++;
     }
     else
     {
-        // WAD file
-        read (handle, &header, sizeof(header));
-        if (strncmp(header.identification,"IWAD",4))
-        {
-            // Homebrew levels?
-            if (strncmp(header.identification,"PWAD",4))
-            {
-                I_Error ("Wad file %s doesn't have IWAD "
-                         "or PWAD id\n", filename);
-            }
+        // WAD file — read exactly 12 bytes; do not rely on sizeof(wadinfo_t)
+        // or an unchecked read() (newlib declares ssize_t read; mismatch
+        // with int-only wrappers has caused short reads / bogus magic).
+        unsigned char     rawhdr[12];
+        ssize_t           nread;
 
-            // ???modifiedgame = true;
-        }
+        nread = read (handle, rawhdr, sizeof (rawhdr));
+        if (nread != (ssize_t) sizeof (rawhdr))
+            I_Error ("Wad file %s: header read got %i bytes, need 12",
+                     filename, (int) nread);
+
+        if (memcmp (rawhdr, "IWAD", 4) && memcmp (rawhdr, "PWAD", 4))
+            I_Error ("Wad file %s doesn't have IWAD or PWAD id\n", filename);
+
+        memcpy (header.identification, rawhdr, 4);
+        memcpy (&header.numlumps, rawhdr + 4, sizeof (header.numlumps));
+        memcpy (&header.infotableofs, rawhdr + 8, sizeof (header.infotableofs));
         header.numlumps = LONG(header.numlumps);
         header.infotableofs = LONG(header.infotableofs);
-        length = header.numlumps*sizeof(filelump_t);
-        fileinfo = alloca (length);
-        lseek (handle, header.infotableofs, SEEK_SET);
-        read (handle, fileinfo, length);
+#ifdef ZCORE_DOOM
+        console_printf ("[UART] WAD hdr: %c%c%c%c lumps=%d dirofs=0x%x\r\n",
+                        rawhdr[0], rawhdr[1], rawhdr[2], rawhdr[3],
+                        header.numlumps, header.infotableofs);
+#endif
+        if (header.numlumps < 1 || header.numlumps > 65536)
+            I_Error ("W_AddFile: absurd lump count %i", header.numlumps);
+        length = header.numlumps * (int) sizeof (filelump_t);
+        if (length / (int) sizeof (filelump_t) != header.numlumps)
+            I_Error ("W_AddFile: lump directory size overflow");
+        /* Zone heap, not malloc: lumpinfo uses realloc/malloc on the sbrk
+         * heap; freeing a large malloc'd directory right after has been
+         * observed to break lump names (e.g. PNAMES missing). */
+        dirbuf = (filelump_t *) Z_Malloc (length, PU_STATIC, 0);
+        fileinfo = dirbuf;
+        if (lseek (handle, header.infotableofs, SEEK_SET) == (off_t) -1)
+            I_Error ("W_AddFile: lseek dir");
+        W_ReadFull (handle, fileinfo, length);
         numlumps += header.numlumps;
     }
 
@@ -215,13 +257,21 @@ void W_AddFile (char *filename)
 
     storehandle = reloadname ? -1 : handle;
 
-    for (i=startlump ; i<numlumps ; i++,lump_p++, fileinfo++)
+    for (i=startlump ; i<numlumps ; i++, lump_p++, fileinfo++)
     {
         lump_p->handle = storehandle;
         lump_p->position = LONG(fileinfo->filepos);
         lump_p->size = LONG(fileinfo->size);
-        strncpy (lump_p->name, fileinfo->name, 8);
+        memcpy (lump_p->name, fileinfo->name, sizeof (lump_p->name));
     }
+
+    if (dirbuf)
+        Z_Free (dirbuf);
+
+#ifdef ZCORE_DOOM
+    console_printf ("[UART] W_AddFile done: %s numlumps=%d\r\n",
+                    filename, numlumps);
+#endif
 
     if (reloadname)
         close (handle);
@@ -251,26 +301,41 @@ void W_Reload (void)
     if ( (handle = open (reloadname,O_RDONLY | O_BINARY)) == -1)
         I_Error ("W_Reload: couldn't open %s",reloadname);
 
-    read (handle, &header, sizeof(header));
+    {
+        unsigned char rawhdr[12];
+        ssize_t       nread = read (handle, rawhdr, sizeof (rawhdr));
+        if (nread != (ssize_t) sizeof (rawhdr))
+            I_Error ("W_Reload: header read got %i bytes", (int) nread);
+        memcpy (header.identification, rawhdr, 4);
+        memcpy (&header.numlumps, rawhdr + 4, sizeof (header.numlumps));
+        memcpy (&header.infotableofs, rawhdr + 8, sizeof (header.infotableofs));
+    }
     lumpcount = LONG(header.numlumps);
     header.infotableofs = LONG(header.infotableofs);
-    length = lumpcount*sizeof(filelump_t);
-    fileinfo = alloca (length);
-    lseek (handle, header.infotableofs, SEEK_SET);
-    read (handle, fileinfo, length);
-
-    // Fill in lumpinfo
-    lump_p = &lumpinfo[reloadlump];
-
-    for (i=reloadlump ;
-         i<reloadlump+lumpcount ;
-         i++,lump_p++, fileinfo++)
+    length = lumpcount * (int) sizeof (filelump_t);
     {
-        if (lumpcache[i])
-            Z_Free (lumpcache[i]);
+        filelump_t *dir = (filelump_t *) Z_Malloc (length, PU_STATIC, 0);
 
-        lump_p->position = LONG(fileinfo->filepos);
-        lump_p->size = LONG(fileinfo->size);
+        fileinfo = dir;
+        if (lseek (handle, header.infotableofs, SEEK_SET) == (off_t) -1)
+            I_Error ("W_Reload: lseek dir");
+        W_ReadFull (handle, fileinfo, length);
+
+        // Fill in lumpinfo
+        lump_p = &lumpinfo[reloadlump];
+
+        for (i=reloadlump ;
+             i<reloadlump+lumpcount ;
+             i++, lump_p++, fileinfo++)
+        {
+            if (lumpcache[i])
+                Z_Free (lumpcache[i]);
+
+            lump_p->position = LONG(fileinfo->filepos);
+            lump_p->size = LONG(fileinfo->size);
+        }
+
+        Z_Free (dir);
     }
 
     close (handle);
@@ -352,42 +417,28 @@ int W_NumLumps (void)
 
 int W_CheckNumForName (char* name)
 {
-    union {
-        char    s[9];
-        int     x[2];
-
-    } name8;
-
-    int         v1;
-    int         v2;
+    char        name8[8];
     lumpinfo_t* lump_p;
 
-    // make the name into two integers for easy compares
-    strncpy (name8.s,name,8);
+    /*
+     * Original DOOM compared lump names via two 32-bit loads. That is
+     * undefined under C strict aliasing: lump_p->name is written as
+     * char[] (strncpy in W_AddFile) but read here as int*. GCC -O2 can
+     * mis-compile that, so PNAMES and other lumps "disappear" even
+     * with a valid IWAD in SDRAM.
+     */
+    memset (name8, 0, sizeof (name8));
+    strncpy (name8, name, 8);
+    strupr (name8);
 
-    // in case the name was a fill 8 chars
-    name8.s[8] = 0;
-
-    // case insensitive
-    strupr (name8.s);
-
-    v1 = name8.x[0];
-    v2 = name8.x[1];
-
-
-    // scan backwards so patch lump files take precedence
     lump_p = lumpinfo + numlumps;
 
     while (lump_p-- != lumpinfo)
     {
-        if ( *(int *)lump_p->name == v1
-             && *(int *)&lump_p->name[4] == v2)
-        {
+        if (!memcmp (lump_p->name, name8, 8))
             return lump_p - lumpinfo;
-        }
     }
 
-    // TFB. Not found.
     return -1;
 }
 
@@ -482,18 +533,37 @@ W_CacheLumpNum
     if ((unsigned)lump >= numlumps)
         I_Error ("W_CacheLumpNum: %i >= numlumps",lump);
 
+    /* ---- Validate cached pointer ----
+     * Z_Malloc's purge loop can free PU_CACHE blocks, clearing
+     * lumpcache[lump] via *block->user = 0.  On Z-Core, SDRAM reads
+     * can return inconsistent data across successive accesses to the
+     * same address (CDC bridge timing).  Read the id field ONCE into
+     * a local, validate, and set the tag directly — never call
+     * Z_ChangeTag (which re-reads id multiple times). */
+    if (lumpcache[lump])
+    {
+        memblock_t *blk = (memblock_t *)((byte *)lumpcache[lump]
+                                          - sizeof(memblock_t));
+        volatile int blk_id = blk->id;  /* single SDRAM read */
+        if (blk_id == 0x1d4a11)
+        {
+            /* Block is valid — update tag directly */
+            blk->tag = tag;
+        }
+        else
+        {
+#ifdef ZCORE_DOOM
+            console_printf("[DIAG] stale lump=%d id=0x%08x\r\n",
+                           lump, (unsigned)blk_id);
+#endif
+            lumpcache[lump] = NULL;  /* stale → re-cache below */
+        }
+    }
+
     if (!lumpcache[lump])
     {
-        // read the lump in
-
-        //printf ("cache miss on lump %i\n",lump);
         Z_Malloc (W_LumpLength (lump), tag, &lumpcache[lump]);
         W_ReadLump (lump, lumpcache[lump]);
-    }
-    else
-    {
-        //printf ("cache hit on lump %i\n",lump);
-        Z_ChangeTag (lumpcache[lump],tag);
     }
 
     return lumpcache[lump];

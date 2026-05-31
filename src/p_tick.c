@@ -27,10 +27,22 @@ static const char __attribute__((unused))
 rcsid[] = "$Id: p_tick.c,v 1.4 1997/02/03 16:47:55 b1 Exp $";
 
 
+#include <stdint.h>
+
 #include "z_zone.h"
 #include "p_local.h"
 
 #include "doomstat.h"
+
+#include "riscv/console.h"
+
+/* Text section bounds (from linker script). Used to validate thinker
+ * function pointers before dispatch — catches SDRAM-corrupted blocks
+ * that would otherwise jalr into garbage and take an illegal-instruction
+ * trap. */
+extern char _etext[];
+#define TEXT_LO  ((uintptr_t)0x10000000)
+#define TEXT_HI  ((uintptr_t)_etext)
 
 
 int     leveltime;
@@ -107,17 +119,49 @@ void P_RunThinkers (void)
     currentthinker = thinkercap.next;
     while (currentthinker != &thinkercap)
     {
-        if ( currentthinker->function.acv == (actionf_v)(-1) )
+        /* Read function pointer ONCE (SDRAM reads are not guaranteed
+         * to be repeatable — same address can yield different values
+         * back-to-back when the CDC bridge glitches). */
+        volatile actionf_p1 fn = currentthinker->function.acp1;
+
+        if ( (actionf_v)fn == (actionf_v)(-1) )
         {
             // time to remove it
             currentthinker->next->prev = currentthinker->prev;
             currentthinker->prev->next = currentthinker->next;
             Z_Free (currentthinker);
         }
-        else
+        else if (fn)
         {
-            if (currentthinker->function.acp1)
-                currentthinker->function.acp1 (currentthinker);
+#if 0
+            /* DISABLED: this guard misfired on valid function pointers
+             * because of SDRAM read-inconsistency, then unlinked + freed
+             * real mobjs and corrupted the thinker list. Keeping the code
+             * here for reference until the underlying SDRAM/CDC bug is
+             * pinned down by the i_main consistency probes. */
+            uintptr_t fp = (uintptr_t)fn;
+            if (fp < TEXT_LO || fp >= TEXT_HI || (fp & 3u)) {
+                const uint32_t *raw = (const uint32_t *)currentthinker;
+                const uint32_t *hdr = raw - (sizeof(memblock_t) / 4);
+                console_printf(
+                    "[THINK] bad fn=%08x thk=%08x "
+                    "prev=%08x next=%08x etext=%08x\r\n",
+                    (unsigned)fp, (unsigned)(uintptr_t)currentthinker,
+                    (unsigned)raw[0], (unsigned)raw[1],
+                    (unsigned)TEXT_HI);
+                console_printf(
+                    "        blk: size=%08x user=%08x tag=%08x id=%08x\r\n",
+                    (unsigned)hdr[0], (unsigned)hdr[1],
+                    (unsigned)hdr[2], (unsigned)hdr[3]);
+                currentthinker->next->prev = currentthinker->prev;
+                currentthinker->prev->next = currentthinker->next;
+                thinker_t *next = currentthinker->next;
+                Z_Free(currentthinker);
+                currentthinker = next;
+                continue;
+            }
+#endif
+            fn(currentthinker);
         }
         currentthinker = currentthinker->next;
     }

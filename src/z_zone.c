@@ -26,9 +26,15 @@ static const char __attribute__((unused))
 rcsid[] = "$Id: z_zone.c,v 1.4 1997/02/03 16:47:58 b1 Exp $";
 
 
+#include <stdint.h>
+
 #include "z_zone.h"
 #include "i_system.h"
 #include "doomdef.h"
+
+#ifdef ZCORE_DOOM
+#include "riscv/console.h"
+#endif
 
 
 //
@@ -115,6 +121,13 @@ void Z_Init (void)
     block->user = NULL;
 
     block->size = mainzone->size - sizeof(memzone_t);
+
+    printf("Z_Init: zone=%p size=%d block=%p bsize=%d\n",
+           (void*)mainzone, mainzone->size, (void*)block, block->size);
+#ifdef ZCORE_DOOM
+    console_printf ("[UART] Z_Init: zone=0x%08x size=%d free_blk=%d\r\n",
+                    (unsigned)(size_t)mainzone, mainzone->size, block->size);
+#endif
 }
 
 
@@ -135,6 +148,17 @@ void Z_Free (void* ptr)
     {
         // smaller values are not pointers
         // Note: OS-dependend?
+
+#ifdef ZCORE_DOOM
+        if (block->tag >= PU_PURGELEVEL) {
+            console_printf("[DIAG] Z_Free purge: ptr=0x%08x user=0x%08x "
+                           "tag=%d *user_before=0x%08x\r\n",
+                           (unsigned)(size_t)((byte *)block + sizeof(memblock_t)),
+                           (unsigned)(size_t)block->user,
+                           block->tag,
+                           (unsigned)(size_t)(*(void **)block->user));
+        }
+#endif
 
         // clear the user's mark
         *block->user = 0;
@@ -219,6 +243,18 @@ Z_Malloc
         if (rover == start)
         {
             // scanned all the way around the list
+            // Dump zone state for diagnosis
+            printf("Z_Malloc FAIL: zone=%p size=%d free=%d rover=%p\n",
+                   (void*)mainzone, mainzone->size, Z_FreeMemory(), (void*)mainzone->rover);
+            {
+                memblock_t *blk = mainzone->blocklist.next;
+                int n = 0;
+                while (blk != &mainzone->blocklist && n < 8) {
+                    printf("  blk[%d] %p sz=%d user=%p tag=%d\n",
+                           n, (void*)blk, blk->size, (void*)blk->user, blk->tag);
+                    blk = blk->next; n++;
+                }
+            }
             I_Error ("Z_Malloc: failed on allocation of %i bytes", size);
         }
 
@@ -275,7 +311,13 @@ Z_Malloc
     else
     {
         if (tag >= PU_PURGELEVEL)
+        {
+#ifdef ZCORE_DOOM
+            console_printf ("[DIAG] Z_Malloc PURGABLE ERR: size=%d tag=%d user=0x%08x\r\n",
+                            size, tag, (unsigned)(size_t)user);
+#endif
             I_Error ("Z_Malloc: an owner is required for purgable blocks");
+        }
 
         // mark as in use, but unowned
         base->user = (void *)2;
@@ -307,6 +349,17 @@ Z_FreeTags
          block != &mainzone->blocklist ;
          block = next)
     {
+        /* Catch corrupt links before lw/sw on misaligned pointers (RV mcause=4). */
+        if (((uintptr_t)block & 3u) != 0)
+            I_Error ("Z_FreeTags: unaligned block %p", (void *)block);
+        {
+            byte *lo = (byte *)mainzone;
+            byte *hi = lo + mainzone->size;
+            if ((byte *)block < lo || (byte *)block + (int)sizeof(memblock_t) > hi)
+                I_Error ("Z_FreeTags: block %p out of zone [%p..%p)",
+                         (void *)block, (void *)lo, (void *)hi);
+        }
+
         // get link before freeing
         next = block->next;
 

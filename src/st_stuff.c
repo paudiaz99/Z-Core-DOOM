@@ -1134,10 +1134,12 @@ void ST_loadGraphics(void)
     // Load the numbers, tall and short
     for (i=0;i<10;i++)
     {
-        sprintf(namebuf, "STTNUM%d", i);
+        namebuf[0] = 'S'; namebuf[1] = 'T'; namebuf[2] = 'T'; namebuf[3] = 'N';
+        namebuf[4] = 'U'; namebuf[5] = 'M'; namebuf[6] = '0' + i; namebuf[7] = '\0';
         tallnum[i] = (patch_t *) W_CacheLumpName(namebuf, PU_STATIC);
 
-        sprintf(namebuf, "STYSNUM%d", i);
+        namebuf[0] = 'S'; namebuf[1] = 'T'; namebuf[2] = 'Y'; namebuf[3] = 'S';
+        namebuf[4] = 'N'; namebuf[5] = 'U'; namebuf[6] = 'M'; namebuf[7] = '0' + i; namebuf[8] = '\0';
         shortnum[i] = (patch_t *) W_CacheLumpName(namebuf, PU_STATIC);
     }
 
@@ -1148,7 +1150,8 @@ void ST_loadGraphics(void)
     // key cards
     for (i=0;i<NUMCARDS;i++)
     {
-        sprintf(namebuf, "STKEYS%d", i);
+        namebuf[0] = 'S'; namebuf[1] = 'T'; namebuf[2] = 'K'; namebuf[3] = 'E';
+        namebuf[4] = 'Y'; namebuf[5] = 'S'; namebuf[6] = '0' + i; namebuf[7] = '\0';
         keys[i] = (patch_t *) W_CacheLumpName(namebuf, PU_STATIC);
     }
 
@@ -1158,7 +1161,8 @@ void ST_loadGraphics(void)
     // arms ownership widgets
     for (i=0;i<6;i++)
     {
-        sprintf(namebuf, "STGNUM%d", i+2);
+        namebuf[0] = 'S'; namebuf[1] = 'T'; namebuf[2] = 'G'; namebuf[3] = 'N';
+        namebuf[4] = 'U'; namebuf[5] = 'M'; namebuf[6] = '0' + (i + 2); namebuf[7] = '\0';
 
         // gray #
         arms[i][0] = (patch_t *) W_CacheLumpName(namebuf, PU_STATIC);
@@ -1168,7 +1172,12 @@ void ST_loadGraphics(void)
     }
 
     // face backgrounds for different color players
-    sprintf(namebuf, "STFB%d", consoleplayer);
+    namebuf[0] = 'S'; namebuf[1] = 'T'; namebuf[2] = 'F'; namebuf[3] = 'B';
+    if (consoleplayer < 0 || consoleplayer > 9)
+        namebuf[4] = '0';
+    else
+        namebuf[4] = '0' + consoleplayer;
+    namebuf[5] = '\0';
     faceback = (patch_t *) W_CacheLumpName(namebuf, PU_STATIC);
 
     // status bar background bits
@@ -1180,18 +1189,24 @@ void ST_loadGraphics(void)
     {
         for (j=0;j<ST_NUMSTRAIGHTFACES;j++)
         {
-            sprintf(namebuf, "STFST%d%d", i, j);
+            namebuf[0] = 'S'; namebuf[1] = 'T'; namebuf[2] = 'F'; namebuf[3] = 'S';
+            namebuf[4] = 'T'; namebuf[5] = '0' + i; namebuf[6] = '0' + j; namebuf[7] = '\0';
             faces[facenum++] = W_CacheLumpName(namebuf, PU_STATIC);
         }
-        sprintf(namebuf, "STFTR%d0", i);        // turn right
+        namebuf[0] = 'S'; namebuf[1] = 'T'; namebuf[2] = 'F'; namebuf[3] = 'T';
+        namebuf[4] = 'R'; namebuf[5] = '0' + i; namebuf[6] = '0'; namebuf[7] = '\0'; /* turn right */
         faces[facenum++] = W_CacheLumpName(namebuf, PU_STATIC);
-        sprintf(namebuf, "STFTL%d0", i);        // turn left
+        namebuf[0] = 'S'; namebuf[1] = 'T'; namebuf[2] = 'F'; namebuf[3] = 'T';
+        namebuf[4] = 'L'; namebuf[5] = '0' + i; namebuf[6] = '0'; namebuf[7] = '\0'; /* turn left */
         faces[facenum++] = W_CacheLumpName(namebuf, PU_STATIC);
-        sprintf(namebuf, "STFOUCH%d", i);       // ouch!
+        namebuf[0] = 'S'; namebuf[1] = 'T'; namebuf[2] = 'F'; namebuf[3] = 'O';
+        namebuf[4] = 'U'; namebuf[5] = 'C'; namebuf[6] = 'H'; namebuf[7] = '0' + i; namebuf[8] = '\0'; /* ouch! */
         faces[facenum++] = W_CacheLumpName(namebuf, PU_STATIC);
-        sprintf(namebuf, "STFEVL%d", i);        // evil grin ;)
+        namebuf[0] = 'S'; namebuf[1] = 'T'; namebuf[2] = 'F'; namebuf[3] = 'E';
+        namebuf[4] = 'V'; namebuf[5] = 'L'; namebuf[6] = '0' + i; namebuf[7] = '\0'; /* evil grin ;) */
         faces[facenum++] = W_CacheLumpName(namebuf, PU_STATIC);
-        sprintf(namebuf, "STFKILL%d", i);       // pissed off
+        namebuf[0] = 'S'; namebuf[1] = 'T'; namebuf[2] = 'F'; namebuf[3] = 'K';
+        namebuf[4] = 'I'; namebuf[5] = 'L'; namebuf[6] = 'L'; namebuf[7] = '0' + i; namebuf[8] = '\0'; /* pissed off */
         faces[facenum++] = W_CacheLumpName(namebuf, PU_STATIC);
     }
     faces[facenum++] = W_CacheLumpName("STFGOD0", PU_STATIC);

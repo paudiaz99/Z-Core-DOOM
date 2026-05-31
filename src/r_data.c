@@ -29,7 +29,7 @@ rcsid[] = "$Id: r_data.c,v 1.4 1997/02/03 16:47:55 b1 Exp $";
 
 
 #include  <alloca.h>
-
+#include  <string.h>
 
 #include "i_system.h"
 #include "z_zone.h"
@@ -44,6 +44,10 @@ rcsid[] = "$Id: r_data.c,v 1.4 1997/02/03 16:47:55 b1 Exp $";
 
 #include "doomstat.h"
 #include "r_sky.h"
+
+#ifdef ZCORE_DOOM
+#include "riscv/console.h"
+#endif
 
 #include "r_data.h"
 
@@ -317,6 +321,7 @@ void R_GenerateLookup (int texnum)
     //  with only a single patch are all done.
     patchcount = (byte *)alloca (texture->width);
     memset (patchcount, 0, texture->width);
+
     patch = texture->patches;
 
     for (i=0 , patch = texture->patches;
@@ -406,6 +411,9 @@ R_GetColumn
 //
 void R_InitTextures (void)
 {
+#ifdef ZCORE_DOOM
+    console_puts ("[UART] R_InitTextures: enter\r\n");
+#endif
     maptexture_t*       mtexture;
     texture_t*          texture;
     mappatch_t*         mpatch;
@@ -442,29 +450,49 @@ void R_InitTextures (void)
     // Load the patch names from pnames.lmp.
     name[8] = 0;
     names = W_CacheLumpName ("PNAMES", PU_STATIC);
-    nummappatches = LONG ( *((int *)names) );
+    {
+        int nraw;
+        memcpy (&nraw, names, sizeof (nraw));
+        nummappatches = LONG (nraw);
+    }
     name_p = names+4;
     patchlookup = alloca (nummappatches*sizeof(*patchlookup));
 
+#ifdef ZCORE_DOOM
+    console_printf ("[UART] R_InitTextures: nummappatches=%d names=0x%08x\r\n",
+                    nummappatches, (unsigned)(unsigned long)names);
+#endif
     for (i=0 ; i<nummappatches ; i++)
     {
         strncpy (name,name_p+i*8, 8);
         patchlookup[i] = W_CheckNumForName (name);
+#ifdef ZCORE_DOOM
+        if ((i & 0x3F) == 0) {
+            console_printf ("[UART] R_InitTextures: patch %d/%d -> %d\r\n",
+                            i, nummappatches, patchlookup[i]);
+        }
+#endif
     }
+#ifdef ZCORE_DOOM
+    console_printf ("[UART] R_InitTextures: PNAMES done, patches=%d (0x%08x)\r\n",
+                    nummappatches, (unsigned)nummappatches);
+#endif
     Z_Free (names);
 
     // Load the map texture definitions from textures.lmp.
     // The data is contained in one or two lumps,
     //  TEXTURE1 for shareware, plus TEXTURE2 for commercial.
     maptex = maptex1 = W_CacheLumpName ("TEXTURE1", PU_STATIC);
-    numtextures1 = LONG(*maptex);
+    memcpy (&numtextures1, maptex, sizeof (numtextures1));
+    numtextures1 = LONG (numtextures1);
     maxoff = W_LumpLength (W_GetNumForName ("TEXTURE1"));
     directory = maptex+1;
 
     if (W_CheckNumForName ("TEXTURE2") != -1)
     {
         maptex2 = W_CacheLumpName ("TEXTURE2", PU_STATIC);
-        numtextures2 = LONG(*maptex2);
+        memcpy (&numtextures2, maptex2, sizeof (numtextures2));
+        numtextures2 = LONG (numtextures2);
         maxoff2 = W_LumpLength (W_GetNumForName ("TEXTURE2"));
     }
     else
@@ -502,6 +530,14 @@ void R_InitTextures (void)
         if (!(i&63))
             printf (".");
 
+#ifdef ZCORE_DOOM
+        if (i < 8) {
+            int tex_off;
+            memcpy(&tex_off, directory, sizeof(tex_off));
+            console_printf("[DIAG] tex[%d] off=%d\r\n", i, LONG(tex_off));
+        }
+#endif
+
         if (i == numtextures1)
         {
             // Start looking in second texture file.
@@ -510,37 +546,103 @@ void R_InitTextures (void)
             directory = maptex+1;
         }
 
-        offset = LONG(*directory);
+        memcpy (&offset, directory, sizeof (offset));
+        offset = LONG (offset);
 
         if (offset > maxoff)
             I_Error ("R_InitTextures: bad texture directory");
 
-        mtexture = (maptexture_t *) ( (byte *)maptex + offset);
+        {
+        unsigned       tex_pc;
+        unsigned short wh_raw;
 
-        texture = textures[i] =
-            Z_Malloc (sizeof(texture_t)
-                      + sizeof(texpatch_t)*(SHORT(mtexture->patchcount)-1),
-                      PU_STATIC, 0);
+        /* TEXTURE entries are byte-aligned in the lump. The on-disk layout is
+         * fixed (id IWAD): 8 name, 4 masked, 2 width, 2 height, 4 obsolete,
+         * 2 patchcount, then patchcount * 10-byte mappatch_t records.
+         * Do NOT read patchcount via maptexture_t — a user-modified boolean
+         * size or #pragma pack breaks offsetof(patchcount) vs the file. */
+        {
+            byte        *src = (byte *)maptex + offset;
+            int          room = (int)(((byte *)maptex + maxoff) - src);
+            unsigned     pc;
+            size_t       mtsz;
+            size_t       txextra;
+            int          alloc_sz;
+            unsigned short raw16;
 
-        texture->width = SHORT(mtexture->width);
-        texture->height = SHORT(mtexture->height);
-        texture->patchcount = SHORT(mtexture->patchcount);
+            enum {
+                MT_OFF_WIDTH      = 12,
+                MT_OFF_HEIGHT     = 14,
+                MT_OFF_PATCHCOUNT = 20,
+                MT_HEADER_BYTES   = 22,
+                MT_PATCH_BYTES    = (int) sizeof (mappatch_t)
+            };
 
-        memcpy (texture->name, mtexture->name, sizeof(texture->name));
-        mpatch = &mtexture->patches[0];
+            if (room < MT_HEADER_BYTES)
+                I_Error ("R_InitTextures: texture past lump end");
+
+            memcpy (&raw16, src + MT_OFF_PATCHCOUNT, sizeof (raw16));
+            pc = (unsigned) SHORT ((short) raw16);
+            if (pc < 1u || pc > 2048u)
+                I_Error ("R_InitTextures: bad patchcount %u", pc);
+
+            mtsz = (size_t) MT_HEADER_BYTES + (size_t) pc * (size_t) MT_PATCH_BYTES;
+            if ((size_t) room < mtsz)
+                I_Error ("R_InitTextures: truncated texture entry");
+
+            mtexture = (maptexture_t *) Z_Malloc ((int)mtsz, PU_STATIC, 0);
+            memcpy (mtexture, src, mtsz);
+
+            txextra = (size_t)(pc - 1u) * sizeof (texpatch_t);
+            if (txextra > (size_t)(INT_MAX - (int)sizeof (texture_t)))
+                I_Error ("R_InitTextures: texture alloc overflow");
+            alloc_sz = (int)(sizeof (texture_t) + txextra);
+            texture = textures[i] = Z_Malloc (alloc_sz, PU_STATIC, 0);
+            tex_pc = pc;
+        }
+
+        memcpy (&wh_raw, (byte *) mtexture + 12, sizeof (wh_raw));
+        texture->width = SHORT ((short) wh_raw);
+        memcpy (&wh_raw, (byte *) mtexture + 14, sizeof (wh_raw));
+        texture->height = SHORT ((short) wh_raw);
+        texture->patchcount = (short) tex_pc;
+
+        memcpy (texture->name, mtexture->name, sizeof (texture->name));
+        /* Patches start at byte 22 in the IWAD record (not &patches[0] if
+         * maptexture_t padding differs from the file). */
+        mpatch = (mappatch_t *) ((byte *) mtexture + 22);
         patch = &texture->patches[0];
 
         for (j=0 ; j<texture->patchcount ; j++, mpatch++, patch++)
         {
+            int pidx;
+            char tn[9];
+            memcpy (tn, texture->name, 8);
+            tn[8] = '\0';
             patch->originx = SHORT(mpatch->originx);
             patch->originy = SHORT(mpatch->originy);
-            patch->patch = patchlookup[SHORT(mpatch->patch)];
-            if (patch->patch == -1)
+            pidx = (int) SHORT (mpatch->patch);
+            if (pidx < 0 || pidx >= nummappatches)
             {
-                I_Error ("R_InitTextures: Missing patch in texture %s",
-                         texture->name);
+                printf ("R_InitTextures: bad PNAMES index %d in texture %s\n",
+                        pidx, tn);
+                patch->patch = 0;
+            }
+            else
+            {
+                patch->patch = patchlookup[pidx];
+            }
+            if (patch->patch < 0 || patch->patch >= numlumps)
+            {
+                /* Shareware TEXTURE1 can reference patches only present
+                 * in the registered WAD.  Don't crash — use lump 0 as a
+                 * placeholder; R_GenerateLookup handles missing columns. */
+                printf ("R_InitTextures: Missing patch in texture %s\n",
+                         tn);
+                patch->patch = 0;
             }
         }
+        Z_Free (mtexture);
         texturecolumnlump[i] = Z_Malloc (texture->width*2, PU_STATIC,0);
         texturecolumnofs[i] = Z_Malloc (texture->width*2, PU_STATIC,0);
 
@@ -552,11 +654,17 @@ void R_InitTextures (void)
         textureheight[i] = texture->height<<FRACBITS;
 
         totalwidth += texture->width;
+        }
     }
 
     Z_Free (maptex1);
     if (maptex2)
         Z_Free (maptex2);
+
+#ifdef ZCORE_DOOM
+    console_printf ("[UART] R_InitTextures: leave numtextures=%d\r\n",
+                    numtextures);
+#endif
 
     // Precalculate whatever possible.
     for (i=0 ; i<numtextures ; i++)
@@ -649,14 +757,29 @@ void R_InitColormaps (void)
 //
 void R_InitData (void)
 {
+#ifdef ZCORE_DOOM
+    console_puts ("[UART] R_InitData: enter\r\n");
+#endif
     R_InitTextures ();
     printf ("\nInitTextures");
+#ifdef ZCORE_DOOM
+    console_puts ("[UART] R_InitData: after InitTextures\r\n");
+#endif
     R_InitFlats ();
     printf ("\nInitFlats");
+#ifdef ZCORE_DOOM
+    console_puts ("[UART] R_InitData: after InitFlats\r\n");
+#endif
     R_InitSpriteLumps ();
     printf ("\nInitSprites");
+#ifdef ZCORE_DOOM
+    console_puts ("[UART] R_InitData: after InitSprites\r\n");
+#endif
     R_InitColormaps ();
     printf ("\nInitColormaps");
+#ifdef ZCORE_DOOM
+    console_puts ("[UART] R_InitData: leave\r\n");
+#endif
 }
 
 

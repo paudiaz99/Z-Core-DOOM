@@ -28,7 +28,7 @@ rcsid[] = "$Id: r_things.c,v 1.5 1997/02/03 16:47:56 b1 Exp $";
 
 #include <stdio.h>
 #include <stdlib.h>
-
+#include <string.h>
 
 #include "doomdef.h"
 #include "m_swap.h"
@@ -210,13 +210,15 @@ void R_InitSpriteDefs (char** namelist)
         memset (sprtemp,-1, sizeof(sprtemp));
 
         maxframe = -1;
-        intname = *(int *)namelist[i];
+        memcpy (&intname, namelist[i], sizeof (intname));
 
         // scan the lumps,
         //  filling in the frames for whatever is found
         for (l=start+1 ; l<end ; l++)
         {
-            if (*(int *)lumpinfo[l].name == intname)
+            int lump4;
+            memcpy (&lump4, lumpinfo[l].name, sizeof (lump4));
+            if (lump4 == intname)
             {
                 frame = lumpinfo[l].name[4] - 'A';
                 rotation = lumpinfo[l].name[5] - '0';
@@ -783,6 +785,12 @@ void R_DrawPlayerSprites (void)
 //
 vissprite_t     vsprsortedhead;
 
+/* Doubly-linked sentinel for the sort pass. Must not live on the stack:
+ * vissprites[] nodes point at this list head; stack locals are destroyed
+ * on return while those pointers can still be read on the next frame,
+ * which is UB and can corrupt the list / crash (e.g. illegal instruction
+ * if a bad pointer is followed as code). */
+static vissprite_t r_vspr_unsorted;
 
 void R_SortVisSprites (void)
 {
@@ -790,12 +798,14 @@ void R_SortVisSprites (void)
     int                 count;
     vissprite_t*        ds;
     vissprite_t*        best;
-    vissprite_t         unsorted;
+    vissprite_t*        unsorted;
     fixed_t             bestscale;
+
+    unsorted = &r_vspr_unsorted;
 
     count = vissprite_p - vissprites;
 
-    unsorted.next = unsorted.prev = &unsorted;
+    unsorted->next = unsorted->prev = unsorted;
 
     if (!count)
         return;
@@ -806,10 +816,10 @@ void R_SortVisSprites (void)
         ds->prev = ds-1;
     }
 
-    vissprites[0].prev = &unsorted;
-    unsorted.next = &vissprites[0];
-    (vissprite_p-1)->next = &unsorted;
-    unsorted.prev = vissprite_p-1;
+    vissprites[0].prev = unsorted;
+    unsorted->next = &vissprites[0];
+    (vissprite_p-1)->next = unsorted;
+    unsorted->prev = vissprite_p-1;
 
     // pull the vissprites out by scale
     //best = 0;         // shut up the compiler warning
@@ -817,7 +827,7 @@ void R_SortVisSprites (void)
     for (i=0 ; i<count ; i++)
     {
         bestscale = MAXINT;
-        for (ds=unsorted.next ; ds!= &unsorted ; ds=ds->next)
+        for (ds=unsorted->next ; ds != unsorted ; ds=ds->next)
         {
             if (ds->scale < bestscale)
             {

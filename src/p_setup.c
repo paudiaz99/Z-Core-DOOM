@@ -46,6 +46,13 @@ rcsid[] = "$Id: p_setup.c,v 1.5 1997/02/03 22:45:12 b1 Exp $";
 
 #include "doomstat.h"
 
+#ifdef ZCORE_DOOM
+#include "riscv/console.h"
+#define SL_TRACE(s) console_puts("[SL] " s "\r\n")
+#else
+#define SL_TRACE(s) ((void)0)
+#endif
+
 
 void    P_SpawnMapThing (mapthing_t*    mthing);
 
@@ -592,6 +599,7 @@ P_SetupLevel
     char        lumpname[9];
     int         lumpnum;
 
+    SL_TRACE("enter");
     totalkills = totalitems = totalsecret = wminfo.maxfrags = 0;
     wminfo.partime = 180;
     for (i=0 ; i<MAXPLAYERS ; i++)
@@ -605,6 +613,7 @@ P_SetupLevel
     players[consoleplayer].viewz = 1;
 
     // Make sure all sounds are stopped before Z_FreeTags.
+    SL_TRACE("sstart");
     S_Start ();
 
 
@@ -616,13 +625,16 @@ P_SetupLevel
     }
     else
 #endif
+        SL_TRACE("freeT");
         Z_FreeTags (PU_LEVEL, PU_PURGELEVEL-1);
 
 
     // UNUSED W_Profile ();
+    SL_TRACE("think");
     P_InitThinkers ();
 
     // if working with a devlopment map, reload it
+    SL_TRACE("wrel");
     W_Reload ();
 
     // find map name
@@ -647,22 +659,22 @@ P_SetupLevel
     leveltime = 0;
 
     // note: most of this ordering is important
-    P_LoadBlockMap (lumpnum+ML_BLOCKMAP);
-    P_LoadVertexes (lumpnum+ML_VERTEXES);
-    P_LoadSectors (lumpnum+ML_SECTORS);
-    P_LoadSideDefs (lumpnum+ML_SIDEDEFS);
+    SL_TRACE("bmap"); P_LoadBlockMap (lumpnum+ML_BLOCKMAP);
+    SL_TRACE("vert"); P_LoadVertexes (lumpnum+ML_VERTEXES);
+    SL_TRACE("sect"); P_LoadSectors (lumpnum+ML_SECTORS);
+    SL_TRACE("side"); P_LoadSideDefs (lumpnum+ML_SIDEDEFS);
 
-    P_LoadLineDefs (lumpnum+ML_LINEDEFS);
-    P_LoadSubsectors (lumpnum+ML_SSECTORS);
-    P_LoadNodes (lumpnum+ML_NODES);
-    P_LoadSegs (lumpnum+ML_SEGS);
+    SL_TRACE("line"); P_LoadLineDefs (lumpnum+ML_LINEDEFS);
+    SL_TRACE("subs"); P_LoadSubsectors (lumpnum+ML_SSECTORS);
+    SL_TRACE("node"); P_LoadNodes (lumpnum+ML_NODES);
+    SL_TRACE("segs"); P_LoadSegs (lumpnum+ML_SEGS);
 
-    rejectmatrix = W_CacheLumpNum (lumpnum+ML_REJECT,PU_LEVEL);
-    P_GroupLines ();
+    SL_TRACE("rjct"); rejectmatrix = W_CacheLumpNum (lumpnum+ML_REJECT,PU_LEVEL);
+    SL_TRACE("group"); P_GroupLines ();
 
     bodyqueslot = 0;
     deathmatch_p = deathmatchstarts;
-    P_LoadThings (lumpnum+ML_THINGS);
+    SL_TRACE("thng"); P_LoadThings (lumpnum+ML_THINGS);
 
     // if deathmatch, randomly spawn the active players
     if (deathmatch)
@@ -680,15 +692,17 @@ P_SetupLevel
     iquehead = iquetail = 0;
 
     // set up world state
-    P_SpawnSpecials ();
+    SL_TRACE("spec"); P_SpawnSpecials ();
 
     // build subsector connect matrix
     //  UNUSED P_ConnectSubsectors ();
 
     // preload graphics
-    if (precache)
-        R_PrecacheLevel ();
+    if (precache) {
+        SL_TRACE("pre"); R_PrecacheLevel ();
+    }
 
+    SL_TRACE("done");
     //printf ("free memory: 0x%x\n", Z_FreeMemory());
 
 }

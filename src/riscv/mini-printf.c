@@ -51,7 +51,7 @@ mini_strlen(const char *s)
 	return len;
 }
 
-static unsigned int
+static unsigned int __attribute__((optimize("O0")))
 mini_itoa(int value, unsigned int radix, unsigned int uppercase, unsigned int unsig,
 	 char *buffer, unsigned int zero_pad)
 {
@@ -149,26 +149,48 @@ mini_vsnprintf(char *buffer, unsigned int buffer_len, const char *fmt, va_list v
 
 			ch=*(fmt++);
 
-			/* Zero padding requested */
-			if (ch=='0') {
-				ch=*(fmt++);
+			/* Zero-fill flag */
+			if (ch == '0') {
+				ch = *(fmt++);
 				if (ch == '\0')
 					goto end;
 				if (ch >= '0' && ch <= '9')
 					zero_pad = ch - '0';
-				ch=*(fmt++);
+				ch = *(fmt++);
+			}
+			/* Skip remaining field-width digits (e.g. %7i, %2.2d) */
+			while (ch >= '1' && ch <= '9')
+				ch = *(fmt++);
+			/* Precision (e.g. %2.2d) — use as zero_pad for integers */
+			if (ch == '.') {
+				ch = *(fmt++);
+				if (ch >= '0' && ch <= '9') {
+					zero_pad = ch - '0';
+					ch = *(fmt++);
+				}
+				while (ch >= '0' && ch <= '9')
+					ch = *(fmt++);
 			}
 
 			switch (ch) {
 				case 0:
 					goto end;
 
-				case 'u':
-				case 'd':
-					len = mini_itoa(va_arg(va, unsigned int), 10, 0, (ch=='u'), bf, zero_pad);
-					_puts(bf, len, &b);
-					break;
+			case 'i':
+			case 'd':
+				len = mini_itoa(va_arg(va, int), 10, 0, 0, bf, zero_pad);
+				_puts(bf, len, &b);
+				break;
 
+			case 'u':
+				len = mini_itoa(va_arg(va, unsigned int), 10, 0, 1, bf, zero_pad);
+				_puts(bf, len, &b);
+				break;
+
+				case 'p':
+					/* Pointer: print as 8-digit hex */
+					zero_pad = 8;
+					/* fall through */
 				case 'x':
 				case 'X':
 					len = mini_itoa(va_arg(va, unsigned int), 16, (ch=='X'), 1, bf, zero_pad);

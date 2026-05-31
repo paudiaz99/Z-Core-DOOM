@@ -78,6 +78,7 @@ rcsid[] = "$Id: d_main.c,v 1.8 1997/02/03 22:45:09 b1 Exp $";
 
 
 #include "d_main.h"
+#include "console.h"
 
 //
 // D-DoomLoop()
@@ -528,33 +529,9 @@ void IdentifyVersion (void)
 {
     devparm = false;
 
-    // Manually select how to start
-#if 0
-    gamemode = commercial;
-    language = french;
-    D_AddFile ("doom2f.wad");
-#elif 0
-    gamemode = commercial;
-    D_AddFile ("doom2.wad");
-#elif 0
-    gamemode = commercial;
-    D_AddFile ("plutonia.wad");
-#elif 0
-    gamemode = commercial;
-    D_AddFile ("tnt.wad");
-#elif 1
-    gamemode = retail;
-    D_AddFile ("doomu.wad");
-#elif 0
-    gamemode = registered;
-    D_AddFile ("doom.wad");
-#elif 0
+    /* Z-Core: shareware DOOM (doom1.wad loaded into SDRAM by bootloader) */
     gamemode = shareware;
     D_AddFile ("doom1.wad");
-#else
-    printf("Game mode indeterminate.\n");
-    gamemode = indetermined;
-#endif
 }
 
 
@@ -563,7 +540,10 @@ void IdentifyVersion (void)
 //
 void D_DoomMain (void)
 {
+    console_puts ("[UART] D_DoomMain: start\r\n");
+
     IdentifyVersion ();
+    console_puts ("[UART] IdentifyVersion: doom1.wad queued\r\n");
 
     setbuf (stdout, NULL);
     modifiedgame = false;
@@ -595,33 +575,43 @@ void D_DoomMain (void)
 
     printf ("Z_Init: Init zone memory allocation daemon. \n");
     Z_Init ();
+    console_puts ("[UART] Z_Init done\r\n");
 
     printf ("W_Init: Init WADfiles.\n");
     W_InitMultipleFiles (wadfiles);
+    console_printf ("[UART] W_Init: numlumps=%d\r\n", numlumps);
 
     printf ("M_Init: Init miscellaneous info.\n");
     M_Init ();
+    console_puts ("[UART] M_Init done\r\n");
 
     printf ("R_Init: Init DOOM refresh daemon - ");
     R_Init ();
+    console_puts ("[UART] R_Init done\r\n");
 
     printf ("\nP_Init: Init Playloop state.\n");
     P_Init ();
+    console_puts ("[UART] P_Init done\r\n");
 
     printf ("I_Init: Setting up machine state.\n");
     I_Init ();
+    console_puts ("[UART] I_Init done\r\n");
 
     printf ("D_CheckNetGame: Checking network game status.\n");
     D_CheckNetGame ();
+    console_puts ("[UART] D_CheckNetGame done\r\n");
 
     printf ("S_Init: Setting up sound.\n");
     S_Init (snd_SfxVolume /* *8 */, snd_MusicVolume /* *8*/ );
+    console_puts ("[UART] S_Init done\r\n");
 
     printf ("HU_Init: Setting up heads up display.\n");
     HU_Init ();
+    console_puts ("[UART] HU_Init done\r\n");
 
     printf ("ST_Init: Init status bar.\n");
     ST_Init ();
+    console_puts ("[UART] ST_Init done, entering title/demo loop\r\n");
 
     if ( gameaction != ga_loadgame )
     {

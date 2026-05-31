@@ -1,14 +1,15 @@
-CROSS ?= riscv-none-embed-
+CROSS ?= riscv32-unknown-elf-
 
 CC = $(CROSS)gcc
 OBJCOPY = $(CROSS)objcopy
 SIZE = $(CROSS)size
-ICEPROG = iceprog
 
-CFLAGS=-Wall -O2 -march=rv32im -mabi=ilp32 -ffreestanding -flto -nostartfiles -fomit-frame-pointer -Wl,--gc-section --specs=nano.specs -I..
+CFLAGS=-std=gnu99 -Wall -O1 -march=rv32im_zicsr -mabi=ilp32 -mstrict-align -ffreestanding -nostdlib -fno-builtin -fno-strict-aliasing -fomit-frame-pointer -Wl,--gc-sections,--no-warn-mismatch -I..
+CFLAGS += -Wno-incompatible-pointer-types -Wno-int-conversion
 
 CFLAGS += \
 	-DNORMALUNIX \
+	-DZCORE_DOOM \
 	$(NULL)
 
 
@@ -33,28 +34,22 @@ SOURCES_doom_arch := \
 	console.c  \
 	libc_backend.c  \
 	mini-printf.c \
+	nolibc.c \
 	$(NULL)
 
 
-all: doom-riscv.bin
+all: doom-zcore.bin
 
-doom-riscv.elf: riscv.lds $(addprefix ../,$(SOURCES_doom)) $(SOURCES_doom_arch)
-	$(CC) $(CFLAGS) -Wl,-Bstatic,-T,riscv.lds,--strip-debug -o $@ $(addprefix ../,$(SOURCES_doom)) $(SOURCES_doom_arch)
+doom-zcore.elf: zcore.lds $(addprefix ../,$(SOURCES_doom)) $(SOURCES_doom_arch)
+	$(CC) $(CFLAGS) -Wl,-Bstatic,-T,zcore.lds,--strip-debug -o $@ $(addprefix ../,$(SOURCES_doom)) $(SOURCES_doom_arch)
 	$(SIZE) $@
 
 clean:
 	rm -f *.bin *.hex *.elf *.o *.gen.h
 
-
 %.bin: %.elf
-	$(OBJCOPY) -O binary $< $@
-
-prog: doom-riscv.bin
-	$(ICEPROG) -o 1M $<
-
-prog_wad: data/doomu.wad
-	$(ICEPROG) -o 2M $<
+	$(OBJCOPY) -O binary $<  $@
 
 
-.PHONY: all clean prog prog_wad
+.PHONY: all clean
 .PRECIOUS: *.elf

@@ -29,6 +29,10 @@ rcsid[] = "$Id: hu_stuff.c,v 1.4 1997/02/03 16:47:52 b1 Exp $";
 
 #include "doomdef.h"
 
+#ifdef __riscv
+extern int console_printf(const char *fmt, ...);
+#endif
+
 #include "z_zone.h"
 
 #include "m_swap.h"
@@ -407,10 +411,31 @@ void HU_Init(void)
     j = HU_FONTSTART;
     for (i=0;i<HU_FONTSIZE;i++)
     {
-        sprintf(buffer, "STCFN%.3d", j++);
-        hu_font[i] = (patch_t *) W_CacheLumpName(buffer, PU_STATIC);
+        int lnum;
+        int n = j++;
+        buffer[0] = 'S'; buffer[1] = 'T'; buffer[2] = 'C'; buffer[3] = 'F'; buffer[4] = 'N';
+        buffer[5] = '0' + ((n / 100) % 10);
+        buffer[6] = '0' + ((n / 10) % 10);
+        buffer[7] = '0' + (n % 10);
+        buffer[8] = '\0';
+#ifdef __riscv
+        if (i == 0)
+            console_printf("[HU] font0: j=%d buf='%c%c%c%c%c%c%c%c' len=%d\n",
+                j-1,
+                buffer[0],buffer[1],buffer[2],buffer[3],
+                buffer[4],buffer[5],buffer[6],buffer[7],
+                (int)strlen(buffer));
+#endif
+        lnum = W_CheckNumForName(buffer);
+        hu_font[i] = (lnum >= 0) ? (patch_t *) W_CacheLumpNum(lnum, PU_STATIC) : NULL;
     }
-
+#ifdef __riscv
+    {
+        int found = 0;
+        for (i = 0; i < HU_FONTSIZE; i++) if (hu_font[i]) found++;
+        console_printf("[HU] font: %d/%d loaded\n", found, HU_FONTSIZE);
+    }
+#endif
 }
 
 void HU_Stop(void)

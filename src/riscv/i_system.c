@@ -1,21 +1,11 @@
 /*
  * i_system.c
  *
- * System support code
+ * System support code for Z-Core
  *
  * Copyright (C) 1993-1996 by id Software, Inc.
  * Copyright (C) 2021 Sylvain Munaut
- * All rights reserved.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Adapted for Z-Core RISC-V SoC
  */
 
 
@@ -39,43 +29,53 @@
 #include "config.h"
 
 
-/* Video controller, used as a time base */
-	/* Normally running at 70 Hz, although in 640x480 compat
-	 * mode, it's 60 Hz so our tick is 15% too slow ... */
-static volatile uint32_t * const video_state = (void*)(VID_CTRL_BASE);
-
-/* Video Ticks tracking */
-static uint16_t vt_last = 0;
-static uint32_t vt_base = 0;
+/* 50 MHz / 35 Hz = 1,428,571 timer ticks per DOOM tic */
+#define TICKS_PER_TIC  1428571
 
 
 void
 I_Init(void)
 {
-	vt_last = video_state[0] & 0xffff;
+	/* Enable timer: bit 0 = enable, bit 1 = auto-reload */
+	TIMER_CTRL_REG = 0x03;
 }
 
 
 byte *
 I_ZoneBase(int *size)
 {
-	/* Give 6M to DOOM */
-	*size = 6 * 1024 * 1024;
+	/* Give 12 MB to DOOM — plenty for shareware textures/sprites.
+	 * Heap starts ~0x100E0000, zone ends ~0x10CE0000, stack at 0x10FFC000. */
+	*size = 12 * 1024 * 1024;
 	return (byte *) malloc (*size);
 }
 
 
+/*
+ * I_GetTime — returns DOOM game tics (35 Hz).
+ *
+ * Uses subtraction-based accumulator to avoid 64-bit division
+ * (libgcc's __udivdi3 contains compressed instructions that
+ * Z-Core cannot execute).  The while-loop runs 0 or 1 times
+ * per call at normal frame rates.
+ */
+static uint32_t timer_last = 0;
+static uint32_t timer_accum = 0;
+static int      doom_tics = 0;
+
 int
 I_GetTime(void)
 {
-	uint16_t vt_now = video_state[0] & 0xffff;
+	uint32_t now = TIMER_LO;
+	timer_accum += (now - timer_last);   /* handles 32-bit wrap */
+	timer_last = now;
 
-	if (vt_now < vt_last)
-		vt_base += 65536;
-	vt_last = vt_now;
+	while (timer_accum >= TICKS_PER_TIC) {
+		timer_accum -= TICKS_PER_TIC;
+		doom_tics++;
+	}
 
-	/* TIC_RATE is 35 in theory */
-	return (vt_base + vt_now) >> 1;
+	return doom_tics;
 }
 
 

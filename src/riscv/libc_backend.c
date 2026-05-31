@@ -1,20 +1,13 @@
 /*
  * libc_backend.c
  *
- * Minimal implementation of libc backend to support what DOOM uses
+ * Minimal libc backend for DOOM on Z-Core
  *
- * Copyright (C) 2021 Sylvain Munaut
- * All rights reserved.
+ * WAD is loaded into SDRAM by the bootloader.
+ * Heap grows from _heap_start (after .bss in SDRAM).
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Original ice40 version by Sylvain Munaut
+ * Adapted for Z-Core RISC-V SoC
  */
 
 
@@ -37,15 +30,34 @@
 // -------------
 
 extern uint8_t _heap_start;
+extern uint8_t __heap_limit;  /* bottom of stack region — heap must stay below */
 static void *heap_end   = &_heap_start;
 
 void *
 _sbrk(intptr_t increment)
 {
 	void *rv = heap_end;
-	heap_end += increment;
+	/* RISC-V strict-align + malloc headers need 4-byte-aligned chunks.
+	 * Non-aligned sbrk steps can leave heap_end misaligned so the next
+	 * malloc's struct blk* lands on an odd boundary → load traps in the
+	 * zone allocator and elsewhere. */
+	if (increment > 0)
+		increment = (increment + 3) & ~(intptr_t)3;
+
+	void *new_end = (uint8_t *)heap_end + increment;
+
+	/* Guard: never grow into the stack region. __heap_limit is the
+	 * bottom of the stack (0x11FE0000); heap must stop below it.
+	 * Previously this checked against __stacktop (0x11FF0000) which let
+	 * heap grow over the entire 64 KB stack region undetected. */
+	if ((uint8_t *)new_end >= &__heap_limit) {
+		console_puts("_sbrk: HEAP OVERFLOW!\r\n");
+		return (void *)-1;
+	}
+
+	heap_end = new_end;
 #ifdef LIBC_DEBUG
-	console_printf("Heap extended to %08x\n", (uint32_t)heap_end);
+	console_printf("Heap extended to %08x\r\n", (uint32_t)(uintptr_t)heap_end);
 #endif
 	return rv;
 }
@@ -54,13 +66,13 @@ _sbrk(intptr_t increment)
 // File handling
 // -------------
 
-/* Flash "filesystem" */
+/* SDRAM "filesystem" — WAD loaded by bootloader */
 static struct {
 	const char *name;	/* Filename */
 	size_t      len;	/* Length */
-	void *      addr;	/* Address in flash */
+	void *      addr;	/* Address in SDRAM */
 } fs[] = {
-	{ "doomu.wad", 12408292, (void*)0x40200000 },
+	{ "doom1.wad", WAD_SIZE, (void*)WAD_BASE },
 	{ NULL }
 };
 
@@ -93,12 +105,20 @@ _open(const char *pathname, int flags)
 {
 	int fn, fd;
 
+	(void)flags;
+
 	/* Try to find file */
 	for (fn=0; fs[fn].name; fn++)
 		if (!strcmp(pathname, fs[fn].name))
 			break;
 
 	if (!fs[fn].name) {
+		errno = ENOENT;
+		return -1;
+	}
+
+	/* Only the embedded IWAD may be opened (guards bogus "doomrc" aliases). */
+	if (strcmp(pathname, "doom1.wad") != 0) {
 		errno = ENOENT;
 		return -1;
 	}
@@ -117,6 +137,11 @@ _open(const char *pathname, int flags)
 	fds[fd].data   = fs[fn].addr;
 
 	console_printf("Opened: %s as fd=%d\n", pathname, fd);
+#ifdef ZCORE_DOOM
+	console_printf("[UART] _open: %s len=%u base=0x%08x\r\n",
+		       pathname, (unsigned)fs[fn].len,
+		       (unsigned)(size_t)fs[fn].addr);
+#endif
 
 	return fd;
 }
@@ -163,7 +188,7 @@ _close(int fd)
 off_t
 _lseek(int fd, off_t offset, int whence)
 {
-	size_t new_offset;
+	off_t newpos;
 
 	if ((fd < 0) || (fd >= NUM_FDS) || (fds[fd].type != FD_FLASH)) {
 		errno = EINVAL;
@@ -172,27 +197,28 @@ _lseek(int fd, off_t offset, int whence)
 
 	switch (whence) {
 	case SEEK_SET:
-		new_offset = offset;
+		newpos = offset;
 		break;
 	case SEEK_CUR:
-		new_offset = fds[fd].offset + offset;
+		newpos = (off_t)fds[fd].offset + offset;
 		break;
 	case SEEK_END:
-		new_offset = fds[fd].len - offset;
+		/* POSIX: position = file_size + offset (offset may be negative) */
+		newpos = (off_t)fds[fd].len + offset;
 		break;
 	default:
 		errno = EINVAL;
 		return -1;
 	}
 
-	if ((new_offset < 0) || (new_offset > fds[fd].len)) {
+	if (newpos < 0 || newpos > (off_t)fds[fd].len) {
 		errno = EINVAL;
 		return -1;
 	}
 
-	fds[fd].offset = new_offset;
+	fds[fd].offset = (size_t)newpos;
 
-	return new_offset;
+	return newpos;
 }
 
 int
@@ -209,11 +235,25 @@ _stat(const char *filename, struct stat *statbuf)
 int
 _fstat(int fd, struct stat *statbuf)
 {
-	/* Not implemented */
-#ifdef LIBC_DEBUG
-	console_printf("[1] Unimplemented _fstat(fd=%d)\n", fd);
-#endif
+	if ((fd < 0) || (fd >= NUM_FDS)) {
+		errno = EINVAL;
+		return -1;
+	}
 
+	memset(statbuf, 0, sizeof(*statbuf));
+
+	if (fds[fd].type == FD_STDIO) {
+		statbuf->st_mode = 0020000; /* S_IFCHR */
+		return 0;
+	}
+
+	if (fds[fd].type == FD_FLASH) {
+		statbuf->st_mode = 0100000; /* S_IFREG */
+		statbuf->st_size = fds[fd].len;
+		return 0;
+	}
+
+	errno = EBADF;
 	return -1;
 }
 
@@ -247,4 +287,21 @@ access(const char *pathname, int mode)
 	}
 
 	return 0;
+}
+
+/* ---- Stubs required by newlib-nano ---- */
+
+int
+_kill(int pid, int sig)
+{
+	(void)pid;
+	(void)sig;
+	errno = EINVAL;
+	return -1;
+}
+
+int
+_getpid(void)
+{
+	return 1;
 }
