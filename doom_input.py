@@ -3,7 +3,7 @@
 Z-Core DOOM Input Driver
 
 Connects to a running DOOM on Z-Core over serial and forwards keyboard input
-using the doom_riscv remote-event protocol.
+using the Z-Core-DOOM remote-event protocol.
 
 Protocol (I_GetRemoteEvent in i_system.c):
   One byte per event:
