@@ -133,7 +133,7 @@
 			 console_printf("[Instret Count] %d\n", instret_diff);
 			 console_printf("[CPI] %d\n", cycle_diff / instret_diff);
 			 console_printf("[Data Cache Hit Rate] %d\n", (data_cache_hits_diff / load_requests_diff)*100);
-			 console_printf("[Instruction Cache Hit Rate] %d\n", instruction_cache_hits_diff / (instruction_cache_misses_diff + instruction_cache_hits_diff) * 100);
+			 console_printf("[Instruction Cache Hit Rate] %d\n", (instruction_cache_hits_diff / (instruction_cache_misses_diff + instruction_cache_hits_diff)) * 100);
 			 console_printf("[MPKI (Misspredictions Per Kilo Instructions)] %d\n", (branch_misspredictions_diff*1000) / instret_diff);
 		 }
 	 }
